@@ -1,44 +1,70 @@
+use iced::widget::{button, row, column, text};
+use iced::{Length, Center, Element, window};
 use std::fs::File;
 use std::io::prelude::*;
 use std::io;
 use std::path::Path;
-use iced::widget::{button, column, text, row};
-use iced::{Alignment, Element, Sandbox, Settings};
 
-struct State
-{
+pub struct State {
     current: String,
     err: Option<String>
 }
 
-impl Sandbox for State
-{
-    type Message = Message;
-
-    fn new() -> Self
-    {
-        let path: &Path = Path::new("/proc/acpi/ibm/fan");
-        let c = get_current(path);
-        State
-        {
-            current: c,
+impl Default for State {
+    fn default() -> Self {
+        State {
+            current: get_current(Path::new("/proc/acpi/ibm/fan")),
             err: None
         }
     }
+}
 
-    fn title(&self) -> String
-    {
-        match self.err.clone()
-        {
-            Some(e) => e,
+#[derive(Debug, Clone, Copy)]
+pub enum Message {
+    Off,
+    Low,
+    Medium,
+    High,
+    Max,
+    Auto,
+}
+
+impl State {
+    fn title(&self) -> String {
+        match &self.err {
+            Some(e) => e.clone(),
             None => "ThinkPad fan".to_string()
         }
     }
 
-    fn view(&self) -> Element<Message>
-    {
+    fn update(&mut self, message: Message) {
+        let path = Path::new("/proc/acpi/ibm/fan");
+        let out = match message {
+            Message::Off => "Off",
+            Message::Low => "Low",
+            Message::Medium => "Medium",
+            Message::High => "High",
+            Message::Max => "Max",
+            Message::Auto => "Auto",
+        };
+        match echo(translate(out), path) {
+            Ok(_) => {
+                self.current = get_current(path);
+                self.err = None;
+            },
+            Err(e) => {
+                self.err = Some(format!("Can't write to file: {:?}", e));
+            }
+        }
+    }
+
+    fn view(&self) -> Element<Message> {
         column![
-            text(format!("level: {}",self.current.clone())).size(50),
+            text(format!("level: {}", self.current))
+            .height(Length::Fill)
+            .width(Length::Fill)
+            .align_x(Center)
+            .size(50),
             row![
                 button("Off").on_press(Message::Off),
                 button("Low").on_press(Message::Low),
@@ -47,99 +73,58 @@ impl Sandbox for State
                 button("Max").on_press(Message::Max),
                 button("Auto").on_press(Message::Auto),
             ]
+            .align_y(Center)
+            .height(Length::Fill)
+            .width(Length::Fill)
             .padding(15)
             .spacing(5)
-            .align_items(Alignment::Center)
         ]
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .align_x(Center)
         .padding(20)
-        .align_items(Alignment::Center)
         .into()
     }
-    fn update(&mut self, message: Message)
-    {
-        let path: &Path = Path::new("/proc/acpi/ibm/fan");
-        let out;
-        match message {
-            Message::Off => out="Off",
-            Message::Low => out="Low",
-            Message::Medium => out="Medium",
-            Message::High => out="High",
-            Message::Max => out="Max",
-            Message::Auto => out="Auto"
-        }
-        match echo(translate(out),path)
-        {
-            Ok(_) => self.err = None,
-            Err(why) => self.err = Some(format!("Can't write to file: {:?}", why.kind()).to_string())
-        }
-        self.current = get_current(path);
-    }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Message
-{
-    Off,
-    Low,
-    Medium,
-    High,
-    Max,
-    Auto
-}
-
-fn translate(a: &str) -> &str
-{
-    let out;
-    match a
-    {
-        "Off" => out = "level 0",
-        "Low" => out = "level 2",
-        "Medium" => out = "level 4",
-        "High" => out = "level 7",
-        "Max" => out = "level disengaged",
-        "Auto" => out = "level auto",
-        _ => out = "level auto"
+fn translate(a: &str) -> &str {
+    match a {
+        "Off" => "level 0",
+        "Low" => "level 2",
+        "Medium" => "level 4",
+        "High" => "level 7",
+        "Max" => "level disengaged",
+        "Auto" => "level auto",
+        _ => "level auto"
     }
-    return out;
 }
 
 fn echo(s: &str, path: &Path) -> io::Result<()> {
     let mut f = File::create(path)?;
-
     f.write_all(s.as_bytes())
 }
 
-fn cat(path: &Path) -> io::Result<String> {
-    let mut f = File::open(path)?;
-    let mut s = String::new();
-    match f.read_to_string(&mut s) {
-        Ok(_) => Ok(s),
-        Err(e) => Err(e),
+fn get_current(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s.lines()
+        .find(|line| line.contains("level:"))
+        .and_then(|line| line.split('\t').last())
+        .unwrap_or("")
+        .to_string(),
+        Err(_) => String::new()
     }
 }
 
-fn get_current(path: &Path) -> String
-{
-    let s;
-    match cat(path)
-    {
-        Ok(r) => s = r,
-        Err(_) => return "".to_string()
-    }
-    let level: &str = s.split("\n").filter(|part| part.contains("level:")).last().unwrap().split("\t").into_iter().last().unwrap();
-    return String::from(level);
-}
+pub fn main() -> iced::Result {
+    let settings =
+    window::Settings {
+        size: iced::Size::new(415.0, 150.0),
+        resizable: false,
+        ..Default::default()
+    };
 
-fn main()
-{
-    State::run(
-        Settings {
-            window: iced::window::Settings {
-                size: (375,150),
-                resizable: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    ).ok();
+    iced::application(State::title, State::update, State::view)
+    .window(settings)
+    .centered()
+    .run()
 }
